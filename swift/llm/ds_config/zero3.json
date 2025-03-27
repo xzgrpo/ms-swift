@@ -28,7 +28,7 @@
         "reduce_bucket_size": "auto",
         "zero_quantized_weights": false,
         "zero_quantized_gradients": false,
-        "stage3_prefetch_bucket_size": "auto",
+        "stage3_prefetch_bucket_size": 0,
         "stage3_param_persistence_threshold": "auto",
         "stage3_max_live_parameters": 1e9,
         "stage3_max_reuse_distance": 1e9,
