@@ -852,6 +852,189 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         for i, output in enumerate(outputs):
             inputs[i]['messages'] = output
 
+        # START OF SOLUTION REPLACEMENT AND TRACKING
+        # Compute completion mask for token length calculation
+        outputs['completion_mask'] = labels[:, -logits_to_keep:] != -100
+
+        def extract_boxed_text(text):
+            pattern = r'oxed{(.*?)}'
+            matches = re.findall(pattern, text)
+            if not matches:
+                return None
+                
+            for match in matches[::-1]:
+                if match != "":
+                    try:
+                        num = float(match)
+                        if num == int(num): 
+                            return int(num)
+                    except Exception:
+                        pass           
+            return None
+        
+        # First gather all inputs across processes
+        all_inputs = gather_object(inputs)
+        
+        # Define data structure to store all question information
+        question_data = {}
+        
+        # Group inputs by question and precompute all necessary data
+        for i, input_item in enumerate(all_inputs):
+            if 'prompt' not in input_item or len(input_item['prompt']) < 2:
+                continue
+            
+            question = input_item['prompt'][1]['content']
+            
+            # Initialize question entry if first time seeing this question
+            if question not in question_data:
+                question_data[question] = {
+                    'index': input_item.get('index', i),
+                    'answer': float(input_item.get('answer', -1)),
+                    'reference_solution': input_item.get('solution', None),
+                    'completions': [],
+                    'completion_indices': [],
+                    'token_lengths': [],
+                    'correct_indices': [],
+                    'incorrect_indices': []
+                }
+            
+            # Process completion if it exists
+            if 'messages' in input_item and len(input_item['messages']) > 0:
+                completion = input_item['messages'][-1]['content']
+                
+                # Calculate token length
+                local_idx = i - self.accelerator.process_index * len(inputs)
+                token_length = 0
+                if 0 <= local_idx < len(inputs) and 'completion_mask' in outputs:
+                    token_length = outputs['completion_mask'][local_idx].sum().item()
+                
+                # Check correctness
+                extracted = extract_boxed_text(completion)
+                is_correct = (extracted is not None and 
+                             extracted == question_data[question]['answer'])
+                
+                # Store all information
+                question_data[question]['completions'].append(completion)
+                question_data[question]['completion_indices'].append(i)
+                question_data[question]['token_lengths'].append(token_length)
+                
+                if is_correct:
+                    question_data[question]['correct_indices'].append(i)
+                else:
+                    question_data[question]['incorrect_indices'].append((i, token_length))
+        
+        # CSV file setup
+        csv_file_path = os.path.join(self.args.output_dir, 'solution_stats.csv')
+        stats_headers = ['index', 'question', 'solution', 'answer', 'accuracy', 'token_lengths']
+        solution_stats = []
+        
+        # Now process each question for both replacement and tracking
+        for question, data in question_data.items():
+            answer = data['answer']
+            reference_solution = data['reference_solution']
+            
+            if answer is None or reference_solution is None:
+                continue
+            
+            # Check if there are any correct solutions
+            has_correct_solution = len(data['correct_indices']) > 0
+            
+            # SOLUTION REPLACEMENT LOGIC
+            if not has_correct_solution and data['incorrect_indices'] and reference_solution != "nan":
+                # Sort incorrect solutions by token length (descending)
+                sorted_incorrect = sorted(data['incorrect_indices'], 
+                                          key=lambda x: x[1], reverse=True)
+                
+                # Get the index of the longest incorrect completion
+                longest_idx = sorted_incorrect[0][0]
+                
+                # Only modify if this completion is in the current process's slice
+                local_idx = longest_idx - self.accelerator.process_index * len(inputs)
+                if 0 <= local_idx < len(inputs):
+                    inputs[local_idx]['messages'][-1]['content'] = reference_solution
+            
+            # SOLUTION TRACKING LOGIC
+            # Count correct solutions
+            correct_count = len(data['correct_indices'])
+            total_count = len(data['completions'])
+            accuracy = f"{correct_count}/{total_count}"
+            
+            # Choose the shortest correct solution or reference
+            if has_correct_solution:
+                # Get indices of correct completions along with their token lengths
+                correct_with_lengths = []
+                for idx in data['correct_indices']:
+                    pos = data['completion_indices'].index(idx)
+                    completion = data['completions'][pos]
+                    token_length = data['token_lengths'][pos]
+                    correct_with_lengths.append((completion, token_length))
+                
+                # Sort by token length (shortest first)
+                correct_with_lengths.sort(key=lambda x: x[1])
+                best_solution = correct_with_lengths[0][0]
+            else:
+                best_solution = reference_solution
+            
+            # Add to stats
+            solution_stats.append({
+                'index': str(data['index']),  # Ensure string conversion
+                'question': question,
+                'solution': best_solution,
+                'answer': str(answer),  # Ensure string conversion
+                'accuracy': accuracy,
+                'token_lengths': ', '.join(map(str, data['token_lengths'])),
+            })
+        
+        # Only main process writes to CSV
+        if self.accelerator.is_main_process:
+            # Get current step number
+            current_step = self.state.global_step if hasattr(self.state, 'global_step') else 0
+            
+            # Create a file every 235 steps
+            file_group = current_step // 235
+            csv_file_path = os.path.join(
+                self.args.output_dir, 
+                f'solution_stats_group{file_group}_step{current_step}.csv'
+            )
+            
+            # Also save to a latest file
+            latest_csv_path = os.path.join(self.args.output_dir, 'solution_stats_latest.csv')
+            
+            # Create output directory if it doesn't exist
+            os.makedirs(os.path.dirname(csv_file_path), exist_ok=True)
+            
+            # Save to the group-specific file (always create new)
+            with open(csv_file_path, 'w', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=stats_headers)
+                writer.writeheader()
+                for row in solution_stats:
+                    writer.writerow(row)
+            
+            # Also save to the latest file (always overwrite)
+            with open(latest_csv_path, 'w', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=stats_headers)
+                writer.writeheader()
+                for row in solution_stats:
+                    writer.writerow(row)
+                            
+        # END OF SOLUTION REPLACEMENT AND TRACKING
+
+        # Calculate batch accuracy for wandb reporting
+        total_correct = 0
+        total_examples = 0
+        for question, data in question_data.items():
+            total_correct += len(data['correct_indices'])
+            total_examples += len(data['completions'])
+        
+        # Calculate batch accuracy
+        batch_accuracy = total_correct / total_examples if total_examples > 0 else 0.0
+        
+        # Add to metrics dictionary that gets reported to wandb
+        mode = 'eval' if self.control.should_evaluate else 'train'
+        self._metrics[mode]['accuracy'].append(batch_accuracy)
+
+
+              
         mini_batch_inputs = self._split_into_mini_batches(inputs, mini_batch_size=self.args.mini_batch_size)
         batch_encoded_inputs = []
         from copy import copy
