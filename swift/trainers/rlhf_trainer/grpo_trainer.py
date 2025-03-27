@@ -892,6 +892,15 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             else:
                 # Repeat all input columns (but "messages" and "completion") to match the number of generations
                 reward_kwargs = RowPreprocessor.rows_to_batched(inputs)
+
+              
+               # Add completion_mask-derived token lengths to reward_kwargs
+               if 'completion_mask' in outputs:  # Check for key in dictionary, not attribute
+                   # Get token lengths from completion mask
+                   token_lengths = outputs['completion_mask'].sum(dim=1).tolist()
+                   reward_kwargs['token_lengths'] = token_lengths
+
+              
                 output_reward_func = reward_func(completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
