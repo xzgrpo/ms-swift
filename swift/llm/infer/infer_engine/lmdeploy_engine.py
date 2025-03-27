@@ -48,7 +48,7 @@ class LmdeployEngine(InferEngine):
         tp: int = 1,
         session_len: Optional[int] = None,
         cache_max_entry_count: float = 0.8,
-        quant_policy: int = 0,  # e.g. 4, 8
+        quant_policy: int = 8,  # e.g. 4, 8
         vision_batch_size: int = 1,  # max_batch_size in VisionConfig
         devices: Optional[List[int]] = None,
         reload_weights: bool = False,
@@ -100,7 +100,7 @@ class LmdeployEngine(InferEngine):
                                tp: int = 1,
                                session_len: Optional[int] = None,
                                cache_max_entry_count: float = 0.8,
-                               quant_policy: int = 0,
+                               quant_policy: int = 8,
                                vision_batch_size: int = 1,
                                devices: Optional[List[int]] = None,
                                engine_kwargs: Optional[Dict[str, Any]] = None):
@@ -189,7 +189,7 @@ class LmdeployEngine(InferEngine):
 
     def _prepare_generation_config(self, request_config: RequestConfig) -> LmdeployGenerationConfig:
         kwargs = {'max_new_tokens': request_config.max_tokens}
-        for key in ['temperature', 'top_k', 'top_p', 'repetition_penalty']:
+        for key in ['temperature', 'top_k', 'top_p', 'min_p', 'repetition_penalty']:
             new_value = getattr(request_config, key)
             if new_value is None:
                 kwargs[key] = getattr(self.generation_config, key)
