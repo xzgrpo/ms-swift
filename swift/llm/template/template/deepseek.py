@@ -245,18 +245,33 @@ class DeepseekV2_5TemplateMeta(TemplateMeta):
 register_template(DeepseekV2_5TemplateMeta(LLMTemplateType.deepseek_v2_5))
 
 
-class DeepseekR1Template(Template):
+# class DeepseekR1Template(Template):
 
-    def _swift_encode(self, inputs: StdTemplateInputs):
-        if not self.is_training:
-            for message in inputs.messages:
-                if message['role'] == 'assistant' and isinstance(message['content'], str):
-                    message['content'] = message['content'].split('</think>')[-1]
-        return super()._swift_encode(inputs)
+#     def _swift_encode(self, inputs: StdTemplateInputs):
+#         if not self.is_training:
+#             for message in inputs.messages:
+#                 if message['role'] == 'assistant' and isinstance(message['content'], str):
+#                     message['content'] = message['content'].split('</think>')[-1]
+#         return super()._swift_encode(inputs)
+
+# register_template(
+#     DeepseekV2_5TemplateMeta(LLMTemplateType.deepseek_r1, template_cls=DeepseekR1Template, response_prefix='<think>\n'))
 
 
-register_template(
-    DeepseekV2_5TemplateMeta(LLMTemplateType.deepseek_r1, template_cls=DeepseekR1Template, response_prefix='<think>\n'))
+@dataclass
+class DeepseekR1DistillTemplateMeta(TemplateMeta):
+    """Custom template for DeepSeek R1 Distill model."""
+    prefix: Prompt = field(default_factory=lambda: ['{{SYSTEM}}'])
+    prompt: Prompt = field(default_factory=lambda: ['<｜User｜>{{QUERY}}<｜Assistant｜>'])
+    chat_sep: Optional[Prompt] = field(default_factory=list)
+    suffix: Prompt = field(default_factory=lambda: ['<｜end▁of▁sentence｜>'])
+    system_prefix: Optional[Prompt] = None
+    response_prefix: str = '<think>\n'
+    default_system: str = 'Please think step by step to solve this problem. Take your final answer modulo 1000 and return it within \\boxed{}.'
+    auto_add_bos: bool = True
+    
+# Register with the same template name as the original
+register_template(DeepseekR1DistillTemplateMeta('deepseek_r1'))
 
 
 class DeepseekVL2Template(DeepseekVLTemplate):
