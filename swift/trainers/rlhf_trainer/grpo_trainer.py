@@ -15,6 +15,8 @@ from queue import Queue
 from types import MethodType
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import csv
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -1080,16 +1082,16 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 with torch.inference_mode(), unwrap_model_for_generation(reward_func,
                                                                          self.accelerator) as unwrapped_reward_func:
                     rewards_per_func[:, i] = unwrapped_reward_func(**reward_inputs).logits[:, 0]
+
             else:
                 # Repeat all input columns (but "messages" and "completion") to match the number of generations
                 reward_kwargs = RowPreprocessor.rows_to_batched(inputs)
-
               
-               # Add completion_mask-derived token lengths to reward_kwargs
-               if 'completion_mask' in outputs:  # Check for key in dictionary, not attribute
-                   # Get token lengths from completion mask
-                   token_lengths = outputs['completion_mask'].sum(dim=1).tolist()
-                   reward_kwargs['token_lengths'] = token_lengths
+                # Add completion_mask-derived token lengths to reward_kwargs
+                if 'completion_mask' in outputs:  # Check for key in dictionary, not attribute
+                    # Get token lengths from completion mask
+                    token_lengths = outputs['completion_mask'].sum(dim=1).tolist()
+                    reward_kwargs['token_lengths'] = token_lengths
 
               
                 output_reward_func = reward_func(completions, **reward_kwargs)
