@@ -111,6 +111,14 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         self.offload_states = {}
         _, _, _, local_world_size = get_dist_setting()
 
+                   
+         # Reference model
+         self.beta = args.beta
+         if self.beta == 0.0:
+             # If beta is 0.0, explicitly set ref_model to None
+             ref_model = None
+
+                   
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
 
@@ -962,6 +970,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 # import pandas as pd
                 # df = pd.DataFrame(table)
                 # wandb.log({'completions': wandb.Table(dataframe=df)})
+              
 
         return batch_encoded_inputs
 
