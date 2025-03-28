@@ -1050,6 +1050,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             # SOLUTION REPLACEMENT LOGIC
             if not has_correct_solution and data['incorrect_indices']:
                 print(f"Question with answer {answer} has 0 accuracy")
+                print(f"Question:{question[:200]}")
                 
                 # Check if we have a usable reference solution
                 ref_solution_exists = reference_solution is not None
@@ -1058,6 +1059,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 has_usable_solution = ref_solution_exists and not ref_solution_is_none_string
                 
                 print(f"Reference solution exists: {has_usable_solution}")
+                print(f"Reference solution: {reference_solution[:200]}")
 
                 if has_usable_solution:
                     # Sort incorrect solutions by token length (descending)
