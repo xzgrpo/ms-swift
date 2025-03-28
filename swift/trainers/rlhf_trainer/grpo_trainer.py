@@ -922,7 +922,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
               
         # START OF SOLUTION REPLACEMENT AND TRACKING
-        print(f"Starting solution replacement and tracking with {len(inputs)} inputs")
+        print(f"Processing {len(inputs)} inputs")
         
         # Function to extract answer from text (keeping this exactly as you provided)
         def extract_boxed_text(text):
@@ -943,7 +943,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         
         # Gather all inputs across processes
         all_inputs = gather_object(inputs)
-        print(f"Gathered {len(all_inputs)} inputs across all processes")
         
         # Get token lengths from completion masks
         token_length_map = {}
@@ -965,36 +964,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         # Data structure for storing question info
         question_data = {}
         
-        # Check message structure
-        if len(all_inputs) > 0:
-            sample = all_inputs[0]
-            print(f"Sample input keys: {list(sample.keys())}")
-            
-            # Check message structure directly
-            if 'messages' in sample and isinstance(sample['messages'], list):
-                print(f"Sample messages count: {len(sample['messages'])}")
-                for i, msg in enumerate(sample['messages']):
-                    print(f"Message {i} role: {msg.get('role', 'unknown')}")
-                    content_preview = msg.get('content', '')[:50] + '...' if msg.get('content') else 'No content'
-                    print(f"Message {i} content: {content_preview}")
-            
-            # Check answer and solution
-            print(f"Sample answer: {sample.get('answer', 'None')}")
-            solution_preview = sample.get('solution', 'None')[:50] + '...' if sample.get('solution') else 'No solution'
-            print(f"Sample solution: {solution_preview}")
-        
         # Process each input using index-based question identification
         for i, input_item in enumerate(all_inputs):
             # Skip if invalid input
             if not isinstance(input_item, dict) or 'messages' not in input_item or not isinstance(input_item['messages'], list):
-                print(f"Skipping input {i}: invalid structure")
                 continue
             
-            # Use first message as question (usually from the user)
-            if len(input_item['messages']) < 1:
-                print(f"Skipping input {i}: no messages")
-                continue
-                
             # Get the question from the user message
             question_msg = None
             for msg in input_item['messages']:
@@ -1006,11 +981,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 question_msg = input_item['messages'][0].get('content', '')
             
             if not question_msg:
-                print(f"Skipping input {i}: no question content")
                 continue
-            
-            # Use question as key
-            print(f"Found question for input {i}: {question_msg[:50]}...")
             
             # Initialize question entry
             if question_msg not in question_data:
@@ -1024,8 +995,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                     'correct_indices': [],
                     'incorrect_indices': []
                 }
-                print(f"Expected answer: {question_data[question_msg]['answer']}")
-                print(f"Has reference solution: {question_data[question_msg]['reference_solution'] is not None}")
             
             # Process completion (assistant's response)
             assistant_msg = None
@@ -1038,7 +1007,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 assistant_msg = input_item['messages'][-1].get('content', '')
             
             if not assistant_msg:
-                print(f"No assistant response for input {i}")
                 continue
             
             # Get token length
@@ -1047,8 +1015,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             # Check correctness
             extracted = extract_boxed_text(assistant_msg)
             expected_answer = question_data[question_msg]['answer']
-            
-            print(f"Input {i} - Extracted answer: {extracted}, Expected answer: {expected_answer}")
             
             is_correct = (extracted is not None and 
                          expected_answer is not None and
@@ -1061,7 +1027,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             
             if is_correct:
                 question_data[question_msg]['correct_indices'].append(i)
-                print(f"Correct answer found for input {i}")
             else:
                 question_data[question_msg]['incorrect_indices'].append((i, token_length))
         
@@ -1076,56 +1041,51 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             reference_solution = data['reference_solution']
             
             if answer is None:
-                print(f"No answer available for question: {question[:50]}...")
                 continue
                 
-            if reference_solution is None or str(reference_solution).lower() == "none":
-                print(f"NO REFERENCE SOLUTION AVAILABLE for question: {question[:50]}...")
-                continue
-            
             # Check if there are any correct solutions
             has_correct_solution = len(data['correct_indices']) > 0
-            
-            # SOLUTION REPLACEMENT LOGIC
-            if not has_correct_solution and data['incorrect_indices'] and reference_solution != "none":
-                print(f"No correct solution found for question with answer {answer}")
-                
-                # Sort incorrect solutions by token length (descending)
-                sorted_incorrect = sorted(data['incorrect_indices'], 
-                                        key=lambda x: x[1], reverse=True)
-                
-                # Get the index of the longest incorrect completion
-                longest_idx = sorted_incorrect[0][0]
-                
-                # Store for replacement if in current process's slice
-                local_idx = longest_idx - self.accelerator.process_index * len(inputs)
-                if 0 <= local_idx < len(inputs):
-                    replacement_candidates.append((local_idx, reference_solution))
-                    print(f"Will replace solution at index {local_idx}")
-            
-            # SOLUTION TRACKING LOGIC
             correct_count = len(data['correct_indices'])
             total_count = len(data['completions'])
             accuracy = f"{correct_count}/{total_count}"
+            
             print(f"Question accuracy: {accuracy}")
+            
+            # SOLUTION REPLACEMENT LOGIC
+            if not has_correct_solution and data['incorrect_indices']:
+                # Check if we have a usable reference solution
+                has_usable_solution = (reference_solution is not None and 
+                                      str(reference_solution).lower() != "none")
+                
+                if has_usable_solution:
+                    print(f"No correct solution found for question with answer {answer}")
+                    print(f"Usable reference solution exists: True")
+                    
+                    # Sort incorrect solutions by token length (descending)
+                    sorted_incorrect = sorted(data['incorrect_indices'], 
+                                            key=lambda x: x[1], reverse=True)
+                    
+                    # Get the index of the longest incorrect completion
+                    longest_idx = sorted_incorrect[0][0]
+                    
+                    # Store for replacement if in current process's slice
+                    local_idx = longest_idx - self.accelerator.process_index * len(inputs)
+                    if 0 <= local_idx < len(inputs):
+                        replacement_candidates.append((local_idx, reference_solution))
         
         # Apply replacements to inputs
         for local_idx, reference_solution in replacement_candidates:
             if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx] and len(inputs[local_idx]['messages']) > 0:
-                print(f"SOLUTION REPLACED at index {local_idx}!")
-                
                 # Find the assistant message to replace
                 for msg_idx, msg in enumerate(inputs[local_idx]['messages']):
                     if msg.get('role') == 'assistant':
-                        print(f"Original: {msg['content'][:50]}...")
                         msg['content'] = reference_solution
-                        print(f"New: {msg['content'][:50]}...")
+                        print(f"SOLUTION REPLACED at index {local_idx}")
                         break
                 else:
                     # If no assistant message found, replace the last message
-                    print(f"Original (last message): {inputs[local_idx]['messages'][-1]['content'][:50]}...")
                     inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                    print(f"New (last message): {inputs[local_idx]['messages'][-1]['content'][:50]}...")
+                    print(f"SOLUTION REPLACED at index {local_idx} (last message)")
         
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
@@ -1273,8 +1233,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
 
         MAX_TOKENS_PER_SEQUENCE = 1024 * 16
-        per_example_loss = (per_token_loss * completion_mask).sum(axis=1) / MAX_TOKENS_PER_SEQUENCE
-        loss = per_example_loss.sum()
+        loss = (per_token_loss * completion_mask).sum() / MAX_TOKENS_PER_SEQUENCE
         print(f"final loss value: {loss}")
  
       
