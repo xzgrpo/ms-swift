@@ -961,7 +961,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         
         # Data structure for storing question info
         question_data = {}
-        
+        replacement_count = 0
         # Process each input using index-based question identification
         for i, input_item in enumerate(all_inputs):
             # Skip if invalid input
@@ -1029,7 +1029,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 question_data[question_msg]['incorrect_indices'].append((i, token_length))
         
         # SOLUTION REPLACEMENT AND TRACKING
-        replacement_count = 0
         replacement_candidates = []  # Store (local_idx, reference_solution) pairs
         
         # Process each question
@@ -1091,9 +1090,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                     inputs[local_idx]['messages'][-1]['content'] = reference_solution
                     replacement_count += 1
                     print(f"SOLUTION REPLACED at index {local_idx} (last message)")
+                    print(f"SOLUTIONS REPLACED : {replacement_count}")
 
         mode = 'eval' if self.control.should_evaluate else 'train'
-        self._metrics[mode]['replacement_count'] = self._metrics[mode].get('replacement_count', []) + [replacement_count]
               
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
