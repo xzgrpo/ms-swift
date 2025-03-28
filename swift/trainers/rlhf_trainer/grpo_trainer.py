@@ -647,22 +647,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         results: List[ChatCompletionResponse] = self.engine.infer(
             infer_requests=inputs_slice, request_config=request_config, use_tqdm=False)
 
-        # Print the response object to examine what's available
-        if rank == 0:
-            print("="*50)
-            print("ENGINE RESPONSE OBJECT:")
-            for i, result in enumerate(results[:1]):  # Just print the first one
-                print(f"Result {i}:")
-                # Many engines include the prompt in the response
-                if hasattr(result, 'prompt'):
-                    print(f"Prompt: {result.prompt}")
-                # Or it might be in another attribute
-                if hasattr(result, 'input'):
-                    print(f"Input: {result.input}")
-                # Print the whole object to see what's available
-                print(f"Full result object: {result}")
-                print("-"*30)
-            print("="*50)
       
         prompt_lens = len(inputs_slice)
         messages_list = [None] * (len(inputs_slice) * self.args.tensor_parallel_size)
@@ -842,17 +826,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         device = self.accelerator.device
 
               
-        # Add your print here to check inputs before generation
-        if self.accelerator.is_main_process:
-            print("="*50)
-            print("INPUTS FORMAT CHECK BEFORE GENERATION:")
-            for i, input_req in enumerate(inputs):
-                print(f"Input {i}:")
-                print(input_req['messages'])
-                print("-"*30)
-            print("="*50)
-          
-      
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm or self.args.use_lmdeploy:
             inputs, outputs = self._fast_infer(inputs)
@@ -892,22 +865,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         for mini_batch in mini_batch_inputs:
             with self._template_context(template):
                 mini_batch_encoded_inputs = [template.encode(infer_request) for infer_request in mini_batch]
-              
-
-                # Add print after encoding to see the templated inputs
-                if self.accelerator.is_main_process:
-                    print("="*50)
-                    print("TEMPLATED INPUTS (AFTER ENCODING):")
-                    for i, encoded in enumerate(mini_batch_encoded_inputs[:2]):  # Just show first two
-                        print(f"Encoded {i}:")
-                        if 'input_ids' in encoded:
-                            # Decode the input_ids to see the actual text with template applied
-                            text = template.tokenizer.decode(encoded['input_ids'])
-                            print(f"Decoded input: {text}")
-                        print("-"*30)
-                    print("="*50)
-
-              
+            
+  
                 mini_batch_encoded_inputs = to_device(
                     template.data_collator(mini_batch_encoded_inputs), self.model.device)
 
