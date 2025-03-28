@@ -1059,9 +1059,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 has_usable_solution = ref_solution_exists and not ref_solution_is_none_string
                 
                 print(f"Reference solution exists: {has_usable_solution}")
-                print(f"Reference solution: {reference_solution[:200]}")
 
                 if has_usable_solution:
+                    print(f"Reference solution: {reference_solution[:200]}")
                     # Sort incorrect solutions by token length (descending)
                     sorted_incorrect = sorted(data['incorrect_indices'], 
                                             key=lambda x: x[1], reverse=False)
