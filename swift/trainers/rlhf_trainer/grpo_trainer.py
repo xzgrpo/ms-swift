@@ -920,23 +920,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 output_reward_func = reward_func(completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
               
-
-        # START OF SOLUTION REPLACEMENT AND TRACKING
-        # Calculate batch accuracy and collect token lengths
-        token_length_map = {}
-        completion_mask_map = {}
-        for i, mini_batch_encoded in enumerate(batch_encoded_inputs):
-            batch_start_idx = i * (self.args.mini_batch_size or 1)  # Handle None case
-            # Get completion mask for this mini-batch
-            completion_mask = mini_batch_encoded['completion_mask']
-            completion_mask_map[i] = completion_mask
-            # Store token lengths by index
-            for j, mask in enumerate(completion_mask):
-                global_idx = batch_start_idx + j
-                if global_idx < len(inputs):
-                    token_length_map[global_idx] = mask.sum().item()
-
-        # Function to extract answer from text
+              
+        print(f"Starting solution replacement and tracking with {len(inputs)} inputs")
+        
         def extract_boxed_text(text):
             pattern = r'oxed{(.*?)}'
             matches = re.findall(pattern, text)
@@ -952,11 +938,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                     except Exception:
                         pass           
             return None
-
-        # Gather all inputs across processes
+        
+        # Gather all inputs and token lengths across processes
         all_inputs = gather_object(inputs)
-
-        # Get token lengths from completion masks in batch_encoded_inputs
+        print(f"Gathered {len(all_inputs)} inputs across all processes")
+        
+        # Get token lengths from completion masks
         token_length_map = {}
         for i, mini_batch in enumerate(batch_encoded_inputs):
             batch_start_idx = i * (self.args.mini_batch_size or 1)
@@ -965,20 +952,29 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 global_idx = batch_start_idx + j
                 if global_idx < len(inputs):
                     token_length_map[global_idx] = mask.sum().item()
-
-        # Gather token lengths from all processes
+        
+        # Gather and combine token lengths from all processes
         all_token_lengths = gather_object(token_length_map)
-
-        # Combine token length maps safely
         combined_token_lengths = {}
         for d in all_token_lengths:
-            if isinstance(d, dict):  # Ensure we're only updating with dictionaries
+            if isinstance(d, dict):
                 combined_token_lengths.update(d)
-
-        # Define data structure to store all question information
+        
+        # Data structure for storing question info
         question_data = {}
-
-        # Group inputs by question and precompute all necessary data
+        
+        # Check sample input structure
+        if len(all_inputs) > 0:
+            sample = all_inputs[0]
+            print(f"Sample input keys: {list(sample.keys())}")
+            if 'prompt' in sample:
+                print(f"Prompt structure: {type(sample['prompt'])}, length: {len(sample['prompt']) if isinstance(sample['prompt'], list) else 'N/A'}")
+            if 'messages' in sample:
+                print(f"Sample has messages: {len(sample['messages']) if isinstance(sample['messages'], list) else 'N/A'}")
+            print(f"Sample has answer: {'answer' in sample}")
+            print(f"Sample has solution: {'solution' in sample}")
+        
+        # Group inputs by question
         for i, input_item in enumerate(all_inputs):
             # Skip if invalid input
             if not isinstance(input_item, dict) or 'prompt' not in input_item or not isinstance(input_item['prompt'], list) or len(input_item['prompt']) < 2:
@@ -1008,6 +1004,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 
                 # Check correctness
                 extracted = extract_boxed_text(completion)
+                print(f"Extracted answer: {extracted}")
+                
                 is_correct = (extracted is not None and 
                             question_data[question]['answer'] is not None and
                             extracted == question_data[question]['answer'])
@@ -1019,20 +1017,22 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 
                 if is_correct:
                     question_data[question]['correct_indices'].append(i)
+                    print(f"Correct answer found for question #{i}")
                 else:
                     question_data[question]['incorrect_indices'].append((i, token_length))
-
-
+        
+        print(f"Processed {len(question_data)} unique questions")
+        
         # SOLUTION REPLACEMENT AND TRACKING
         replacement_candidates = []  # Store (local_idx, reference_solution) pairs
-
+        
         # Process each question
         for question, data in question_data.items():
             answer = data['answer']
             reference_solution = data['reference_solution']
             
             if answer is None or reference_solution is None or str(reference_solution).lower() == "none":
-                print("NO REFERENCE SOLUTION AVAILABLE!)
+                print("NO REFERENCE SOLUTION AVAILABLE!")
                 continue
             
             # Check if there are any correct solutions
@@ -1040,6 +1040,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             
             # SOLUTION REPLACEMENT LOGIC
             if not has_correct_solution and data['incorrect_indices'] and reference_solution != "none":
+                print(f"No correct solution found for question with answer {answer}")
+                
                 # Sort incorrect solutions by token length (descending)
                 sorted_incorrect = sorted(data['incorrect_indices'], 
                                         key=lambda x: x[1], reverse=True)
@@ -1051,30 +1053,32 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 local_idx = longest_idx - self.accelerator.process_index * len(inputs)
                 if 0 <= local_idx < len(inputs):
                     replacement_candidates.append((local_idx, reference_solution))
+                    print(f"Will replace solution at index {local_idx}")
             
             # SOLUTION TRACKING LOGIC
             correct_count = len(data['correct_indices'])
             total_count = len(data['completions'])
             accuracy = f"{correct_count}/{total_count}"
-            print(f"question accuracy: {accuracy}")
-                
-
-        # Apply replacements to inputs (do this at once to avoid modifying during iteration)
+            print(f"Question accuracy: {accuracy}")
+        
+        # Apply replacements to inputs
         for local_idx, reference_solution in replacement_candidates:
             if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx] and len(inputs[local_idx]['messages']) > 0:
+                print(f"SOLUTION REPLACED at index {local_idx}!")
+                print(f"Original: {inputs[local_idx]['messages'][-1]['content'][:50]}...")
                 inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                print("SOLUTION REPLACED!")
-
+                print(f"New: {inputs[local_idx]['messages'][-1]['content'][:50]}...")
+        
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
         total_examples = 0
         for question, data in question_data.items():
             total_correct += len(data['correct_indices'])
             total_examples += len(data['completions'])
-
+        
         # Calculate batch accuracy
         batch_accuracy = total_correct / total_examples if total_examples > 0 else 0.0
-        print(f"batch accuracy: {batch_accuracy}")
+        print(f"Batch accuracy: {batch_accuracy}")
               
         # Add to metrics dictionary that gets reported to wandb
         mode = 'eval' if self.control.should_evaluate else 'train'
