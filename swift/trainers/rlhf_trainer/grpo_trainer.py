@@ -1095,8 +1095,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             # Get current step number
             current_step = self.state.global_step if hasattr(self.state, 'global_step') else 0
             
-            # Create a file every 235 steps
-            file_group = current_step // 235
+            # Create a file every 205 steps
+            file_group = current_step // 205
             csv_file_path = os.path.join(
                 self.args.output_dir, 
                 f'solution_stats_group{file_group}_step{current_step}.csv'
