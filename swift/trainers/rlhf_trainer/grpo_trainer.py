@@ -1079,17 +1079,11 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         
         # Apply replacements to inputs
         for local_idx, reference_solution in replacement_candidates:
-            if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx] and len(inputs[local_idx]['messages']) > 0:
-                # Find the assistant message to replace
-                for msg_idx, msg in enumerate(inputs[local_idx]['messages']):
-                    if msg.get('role') == 'assistant':
-                        # msg['content'] = reference_solution
-                        print(f"SOLUTION REPLACED at index {local_idx}")
-                        break
-                else:
-                    # If no assistant message found, replace the last message
+            if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx]:
+                # Find the last message which should be the assistant's response in a one-turn conversation
+                if len(inputs[local_idx]['messages']) > 0 and inputs[local_idx]['messages'][-1].get('role') == 'assistant':
                     # inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                    print(f"SOLUTION REPLACED at index {local_idx} (last message)")
+                    print(f"SOLUTION REPLACED at index {local_idx}")
 
         mode = 'eval' if self.control.should_evaluate else 'train'
               
