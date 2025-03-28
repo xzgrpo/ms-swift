@@ -822,6 +822,19 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
 
         device = self.accelerator.device
+
+              
+        # Add your print here to check inputs before generation
+        if self.accelerator.is_main_process:
+            print("="*50)
+            print("INPUTS FORMAT CHECK BEFORE GENERATION:")
+            for i, input_req in enumerate(inputs):
+                print(f"Input {i}:")
+                print(input_req['messages'])
+                print("-"*30)
+            print("="*50)
+          
+      
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm or self.args.use_lmdeploy:
             inputs, outputs = self._fast_infer(inputs)
