@@ -1041,10 +1041,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
+      
         MAX_TOKENS_PER_SEQUENCE = 1024 * 14
         per_example_loss = (per_token_loss * completion_mask).sum(axis=1) / MAX_TOKENS_PER_SEQUENCE
         loss = per_example_loss.mean()
 
+      
         # Log the metrics
         metrics = {}
         mode = 'eval' if self.control.should_evaluate else 'train'
