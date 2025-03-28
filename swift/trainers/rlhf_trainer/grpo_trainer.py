@@ -1062,18 +1062,18 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 if has_usable_solution:
                     # Sort incorrect solutions by token length (descending)
                     sorted_incorrect = sorted(data['incorrect_indices'], 
-                                            key=lambda x: x[1], reverse=True)
+                                            key=lambda x: x[1], reverse=False)
                     
-                    # Get the index of the longest incorrect completion
-                    longest_idx = sorted_incorrect[0][0]
+                    # Get the index of the shortest incorrect completion
+                    shortest_idx = sorted_incorrect[0][0]
                     
                     # Store for replacement if in current process's slice
-                    local_idx = longest_idx - self.accelerator.process_index * len(inputs)
+                    local_idx = shortest_idx - self.accelerator.process_index * len(inputs)
                     if 0 <= local_idx < len(inputs):
                         replacement_candidates.append((local_idx, reference_solution))
                         print(f"Will replace solution at index {local_idx}")
                     else:
-                        print(f"Index {longest_idx} is not in this process's slice")
+                        print(f"Index {shortest_idx} is not in this process's slice")
         
         # Apply replacements to inputs
         for local_idx, reference_solution in replacement_candidates:
