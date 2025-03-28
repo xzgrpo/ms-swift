@@ -961,7 +961,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         
         # Data structure for storing question info
         question_data = {}
-        replacement_count = 0
+              
         # Process each input using index-based question identification
         for i, input_item in enumerate(all_inputs):
             # Skip if invalid input
@@ -1081,16 +1081,13 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 # Find the assistant message to replace
                 for msg_idx, msg in enumerate(inputs[local_idx]['messages']):
                     if msg.get('role') == 'assistant':
-                        msg['content'] = reference_solution
-                        replacement_count += 1
+                        # msg['content'] = reference_solution
                         print(f"SOLUTION REPLACED at index {local_idx}")
                         break
                 else:
                     # If no assistant message found, replace the last message
-                    inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                    replacement_count += 1
+                    # inputs[local_idx]['messages'][-1]['content'] = reference_solution
                     print(f"SOLUTION REPLACED at index {local_idx} (last message)")
-                    print(f"SOLUTIONS REPLACED : {replacement_count}")
 
         mode = 'eval' if self.control.should_evaluate else 'train'
               
@@ -1239,8 +1236,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
 
-        MAX_TOKENS_PER_SEQUENCE = 14336
-        loss = (per_token_loss * completion_mask).sum() / MAX_TOKENS_PER_SEQUENCE
+        MAX_TOKENS_PER_SEQUENCE = 15360
+        per_query_loss = (per_token_loss * completion_mask).sum(axis=1) / MAX_TOKENS_PER_SEQUENCE
+        loss = per_query_loss.mean()
       
         # Log the metrics
         metrics = {}
