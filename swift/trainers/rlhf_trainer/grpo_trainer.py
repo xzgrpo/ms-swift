@@ -1022,9 +1022,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 else:
                     question_data[question]['incorrect_indices'].append((i, token_length))
 
-        # CSV file setup
-        stats_headers = ['index', 'question', 'solution', 'answer', 'accuracy', 'token_lengths']
-        solution_stats = []
 
         # SOLUTION REPLACEMENT AND TRACKING
         replacement_candidates = []  # Store (local_idx, reference_solution) pairs
@@ -1035,6 +1032,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             reference_solution = data['reference_solution']
             
             if answer is None or reference_solution is None or str(reference_solution).lower() == "none":
+                print("NO REFERENCE SOLUTION AVAILABLE!)
                 continue
             
             # Check if there are any correct solutions
@@ -1058,69 +1056,14 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             correct_count = len(data['correct_indices'])
             total_count = len(data['completions'])
             accuracy = f"{correct_count}/{total_count}"
-            
-            # Choose the shortest correct solution or reference
-            best_solution = reference_solution
-            if has_correct_solution:
-                # Get indices of correct completions along with their token lengths
-                correct_with_lengths = []
-                for idx in data['correct_indices']:
-                    pos = data['completion_indices'].index(idx)
-                    completion = data['completions'][pos]
-                    token_length = data['token_lengths'][pos]
-                    correct_with_lengths.append((completion, token_length))
+            print(f"question accuracy: {accuracy}")
                 
-                # Sort by token length (shortest first)
-                if correct_with_lengths:
-                    correct_with_lengths.sort(key=lambda x: x[1])
-                    best_solution = correct_with_lengths[0][0]
-            
-            # Add to stats
-            solution_stats.append({
-                'index': str(data['index']),
-                'question': question,
-                'solution': best_solution,
-                'answer': str(answer),
-                'accuracy': accuracy,
-                'token_lengths': ', '.join(map(str, data['token_lengths'])),
-            })
 
         # Apply replacements to inputs (do this at once to avoid modifying during iteration)
         for local_idx, reference_solution in replacement_candidates:
             if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx] and len(inputs[local_idx]['messages']) > 0:
                 inputs[local_idx]['messages'][-1]['content'] = reference_solution
-
-        # Only main process writes to CSV
-        if self.accelerator.is_main_process:
-            # Get current step number
-            current_step = self.state.global_step if hasattr(self.state, 'global_step') else 0
-            
-            # Create a file every 205 steps
-            file_group = current_step // 205
-            csv_file_path = os.path.join(
-                self.args.output_dir, 
-                f'solution_stats_group{file_group}_step{current_step}.csv'
-            )
-            
-            # Also save to a latest file
-            latest_csv_path = os.path.join(self.args.output_dir, 'solution_stats_latest.csv')
-            
-            # Create output directory if it doesn't exist
-            os.makedirs(os.path.dirname(csv_file_path), exist_ok=True)
-            
-            # Save to the group-specific file
-            with open(csv_file_path, 'w', newline='') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=stats_headers)
-                writer.writeheader()
-                for row in solution_stats:
-                    writer.writerow(row)
-            
-            # Also save to the latest file
-            with open(latest_csv_path, 'w', newline='') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=stats_headers)
-                writer.writeheader()
-                for row in solution_stats:
-                    writer.writerow(row)
+                print("SOLUTION REPLACED!")
 
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
@@ -1131,7 +1074,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         # Calculate batch accuracy
         batch_accuracy = total_correct / total_examples if total_examples > 0 else 0.0
-
+        print(f"batch accuracy: {batch_accuracy}")
+              
         # Add to metrics dictionary that gets reported to wandb
         mode = 'eval' if self.control.should_evaluate else 'train'
         self._metrics[mode]['accuracy'].append(batch_accuracy)
