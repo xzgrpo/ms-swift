@@ -1053,14 +1053,20 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             
             # SOLUTION REPLACEMENT LOGIC
             if not has_correct_solution and data['incorrect_indices']:
+                print(f"Question with answer {answer} has 0 accuracy")
+                
                 # Check if we have a usable reference solution
-                has_usable_solution = (reference_solution is not None and 
-                                      str(reference_solution).lower() != "none")
+                ref_solution_exists = reference_solution is not None
+                ref_solution_is_none_string = (isinstance(reference_solution, str) and 
+                                             reference_solution.lower() == "none")
+                has_usable_solution = ref_solution_exists and not ref_solution_is_none_string
+                
+                print(f"Reference solution exists: {ref_solution_exists}")
+                if ref_solution_exists:
+                    print(f"Reference solution is 'none' string: {ref_solution_is_none_string}")
+                print(f"Has usable reference solution: {has_usable_solution}")
                 
                 if has_usable_solution:
-                    print(f"No correct solution found for question with answer {answer}")
-                    print(f"Usable reference solution exists: True")
-                    
                     # Sort incorrect solutions by token length (descending)
                     sorted_incorrect = sorted(data['incorrect_indices'], 
                                             key=lambda x: x[1], reverse=True)
@@ -1072,6 +1078,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                     local_idx = longest_idx - self.accelerator.process_index * len(inputs)
                     if 0 <= local_idx < len(inputs):
                         replacement_candidates.append((local_idx, reference_solution))
+                        print(f"Will replace solution at index {local_idx}")
+                    else:
+                        print(f"Index {longest_idx} is not in this process's slice")
         
         # Apply replacements to inputs
         for local_idx, reference_solution in replacement_candidates:
