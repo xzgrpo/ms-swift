@@ -921,9 +921,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
               
-        # START OF SOLUTION REPLACEMENT AND TRACKING
-        print(f"Processing {len(inputs)} inputs")
-        
+        # START OF SOLUTION REPLACEMENT AND TRACKING        
         # Function to extract answer from text (keeping this exactly as you provided)
         def extract_boxed_text(text):
             pattern = r'oxed{(.*?)}'
@@ -1030,9 +1028,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             else:
                 question_data[question_msg]['incorrect_indices'].append((i, token_length))
         
-        print(f"Processed {len(question_data)} unique questions")
-        
         # SOLUTION REPLACEMENT AND TRACKING
+        replacement_count = 0
         replacement_candidates = []  # Store (local_idx, reference_solution) pairs
         
         # Process each question
@@ -1061,11 +1058,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                                              reference_solution.lower() == "none")
                 has_usable_solution = ref_solution_exists and not ref_solution_is_none_string
                 
-                print(f"Reference solution exists: {ref_solution_exists}")
-                if ref_solution_exists:
-                    print(f"Reference solution is 'none' string: {ref_solution_is_none_string}")
-                print(f"Has usable reference solution: {has_usable_solution}")
-                
+                print(f"Reference solution exists: {has_usable_solution}")
+
                 if has_usable_solution:
                     # Sort incorrect solutions by token length (descending)
                     sorted_incorrect = sorted(data['incorrect_indices'], 
@@ -1089,13 +1083,18 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 for msg_idx, msg in enumerate(inputs[local_idx]['messages']):
                     if msg.get('role') == 'assistant':
                         msg['content'] = reference_solution
+                        replacement_count += 1
                         print(f"SOLUTION REPLACED at index {local_idx}")
                         break
                 else:
                     # If no assistant message found, replace the last message
                     inputs[local_idx]['messages'][-1]['content'] = reference_solution
+                    replacement_count += 1
                     print(f"SOLUTION REPLACED at index {local_idx} (last message)")
-        
+
+        mode = 'eval' if self.control.should_evaluate else 'train'
+        self._metrics[mode]['replacement_count'] = self._metrics[mode].get('replacement_count', []) + [replacement_count]
+              
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
         total_examples = 0
