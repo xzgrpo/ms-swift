@@ -874,6 +874,22 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         for mini_batch in mini_batch_inputs:
             with self._template_context(template):
                 mini_batch_encoded_inputs = [template.encode(infer_request) for infer_request in mini_batch]
+              
+
+                # Add print after encoding to see the templated inputs
+                if self.accelerator.is_main_process:
+                    print("="*50)
+                    print("TEMPLATED INPUTS (AFTER ENCODING):")
+                    for i, encoded in enumerate(mini_batch_encoded_inputs[:2]):  # Just show first two
+                        print(f"Encoded {i}:")
+                        if 'input_ids' in encoded:
+                            # Decode the input_ids to see the actual text with template applied
+                            text = template.tokenizer.decode(encoded['input_ids'])
+                            print(f"Decoded input: {text}")
+                        print("-"*30)
+                    print("="*50)
+
+              
                 mini_batch_encoded_inputs = to_device(
                     template.data_collator(mini_batch_encoded_inputs), self.model.device)
 
