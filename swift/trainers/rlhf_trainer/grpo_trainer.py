@@ -1209,10 +1209,23 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-      
-        MAX_TOKENS_PER_SEQUENCE = 1024 * 14
-        per_example_loss = (per_token_loss * completion_mask).sum(axis=1) / MAX_TOKENS_PER_SEQUENCE
-        loss = per_example_loss.sum()
+
+        # Print the shape of per_token_loss to verify
+        print(f"per_token_loss shape: {per_token_loss.shape}")
+
+        MAX_TOKENS_PER_SEQUENCE = 1024 * 16
+        
+        # First normalize each completion's loss by the constant MAX_TOKENS
+        per_example_loss = (per_token_loss * completion_mask).sum(axis=-1) / MAX_TOKENS_PER_SEQUENCE
+        
+        # Reshape to [batch_size, num_generations] to group by prompt
+        reshaped_loss = per_example_loss.reshape(-1, num_generations)
+        
+        # Sum within each prompt group
+        prompt_loss = reshaped_loss.sum(dim=1)  
+        
+        # Then take the mean or sum across prompts in the batch
+        loss = prompt_loss.mean()
 
       
         # Log the metrics
