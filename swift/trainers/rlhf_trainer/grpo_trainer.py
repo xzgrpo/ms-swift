@@ -646,6 +646,24 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         request_config = copy(request_config)
         results: List[ChatCompletionResponse] = self.engine.infer(
             infer_requests=inputs_slice, request_config=request_config, use_tqdm=False)
+
+        # Print the response object to examine what's available
+        if rank == 0:
+            print("="*50)
+            print("ENGINE RESPONSE OBJECT:")
+            for i, result in enumerate(results[:1]):  # Just print the first one
+                print(f"Result {i}:")
+                # Many engines include the prompt in the response
+                if hasattr(result, 'prompt'):
+                    print(f"Prompt: {result.prompt}")
+                # Or it might be in another attribute
+                if hasattr(result, 'input'):
+                    print(f"Input: {result.input}")
+                # Print the whole object to see what's available
+                print(f"Full result object: {result}")
+                print("-"*30)
+            print("="*50)
+      
         prompt_lens = len(inputs_slice)
         messages_list = [None] * (len(inputs_slice) * self.args.tensor_parallel_size)
         if self.multi_turn_func:
