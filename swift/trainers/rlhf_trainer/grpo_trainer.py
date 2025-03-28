@@ -919,10 +919,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
               
                 output_reward_func = reward_func(completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
               
-              
+        # START OF SOLUTION REPLACEMENT AND TRACKING
         print(f"Starting solution replacement and tracking with {len(inputs)} inputs")
         
+        # Function to extract answer from text (keeping this exactly as you provided)
         def extract_boxed_text(text):
             pattern = r'oxed{(.*?)}'
             matches = re.findall(pattern, text)
@@ -939,7 +941,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                         pass           
             return None
         
-        # Gather all inputs and token lengths across processes
+        # Gather all inputs across processes
         all_inputs = gather_object(inputs)
         print(f"Gathered {len(all_inputs)} inputs across all processes")
         
@@ -953,7 +955,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 if global_idx < len(inputs):
                     token_length_map[global_idx] = mask.sum().item()
         
-        # Gather and combine token lengths from all processes
+        # Gather token lengths from all processes
         all_token_lengths = gather_object(token_length_map)
         combined_token_lengths = {}
         for d in all_token_lengths:
@@ -963,63 +965,105 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         # Data structure for storing question info
         question_data = {}
         
-        # Check sample input structure
+        # Check message structure
         if len(all_inputs) > 0:
             sample = all_inputs[0]
             print(f"Sample input keys: {list(sample.keys())}")
-            if 'prompt' in sample:
-                print(f"Prompt structure: {type(sample['prompt'])}, length: {len(sample['prompt']) if isinstance(sample['prompt'], list) else 'N/A'}")
-            if 'messages' in sample:
-                print(f"Sample has messages: {len(sample['messages']) if isinstance(sample['messages'], list) else 'N/A'}")
-            print(f"Sample has answer: {'answer' in sample}")
-            print(f"Sample has solution: {'solution' in sample}")
+            
+            # Check message structure directly
+            if 'messages' in sample and isinstance(sample['messages'], list):
+                print(f"Sample messages count: {len(sample['messages'])}")
+                for i, msg in enumerate(sample['messages']):
+                    print(f"Message {i} role: {msg.get('role', 'unknown')}")
+                    content_preview = msg.get('content', '')[:50] + '...' if msg.get('content') else 'No content'
+                    print(f"Message {i} content: {content_preview}")
+            
+            # Check answer and solution
+            print(f"Sample answer: {sample.get('answer', 'None')}")
+            solution_preview = sample.get('solution', 'None')[:50] + '...' if sample.get('solution') else 'No solution'
+            print(f"Sample solution: {solution_preview}")
         
-        # Group inputs by question
+        # Process each input using index-based question identification
         for i, input_item in enumerate(all_inputs):
             # Skip if invalid input
-            if not isinstance(input_item, dict) or 'prompt' not in input_item or not isinstance(input_item['prompt'], list) or len(input_item['prompt']) < 2:
+            if not isinstance(input_item, dict) or 'messages' not in input_item or not isinstance(input_item['messages'], list):
+                print(f"Skipping input {i}: invalid structure")
                 continue
             
-            question = input_item['prompt'][1]['content']
+            # Use first message as question (usually from the user)
+            if len(input_item['messages']) < 1:
+                print(f"Skipping input {i}: no messages")
+                continue
+                
+            # Get the question from the user message
+            question_msg = None
+            for msg in input_item['messages']:
+                if msg.get('role') == 'user':
+                    question_msg = msg.get('content', '')
+                    break
             
-            # Initialize question entry if first time seeing this question
-            if question not in question_data:
-                question_data[question] = {
+            if not question_msg:
+                question_msg = input_item['messages'][0].get('content', '')
+            
+            if not question_msg:
+                print(f"Skipping input {i}: no question content")
+                continue
+            
+            # Use question as key
+            print(f"Found question for input {i}: {question_msg[:50]}...")
+            
+            # Initialize question entry
+            if question_msg not in question_data:
+                question_data[question_msg] = {
                     'index': input_item.get('index', i),
-                    'answer': float(input_item.get('answer', -1)),
-                    'reference_solution': input_item.get('solution', None),
+                    'answer': input_item.get('answer'),
+                    'reference_solution': input_item.get('solution'),
                     'completions': [],
                     'completion_indices': [],
                     'token_lengths': [],
                     'correct_indices': [],
                     'incorrect_indices': []
                 }
+                print(f"Expected answer: {question_data[question_msg]['answer']}")
+                print(f"Has reference solution: {question_data[question_msg]['reference_solution'] is not None}")
             
-            # Process completion if it exists
-            if 'messages' in input_item and len(input_item['messages']) > 0:
-                completion = input_item['messages'][-1]['content']
-                
-                # Get token length from our combined map
-                token_length = combined_token_lengths.get(i, 0)
-                
-                # Check correctness
-                extracted = extract_boxed_text(completion)
-                print(f"Extracted answer: {extracted}")
-                
-                is_correct = (extracted is not None and 
-                            question_data[question]['answer'] is not None and
-                            extracted == question_data[question]['answer'])
-                
-                # Store all information
-                question_data[question]['completions'].append(completion)
-                question_data[question]['completion_indices'].append(i)
-                question_data[question]['token_lengths'].append(token_length)
-                
-                if is_correct:
-                    question_data[question]['correct_indices'].append(i)
-                    print(f"Correct answer found for question #{i}")
-                else:
-                    question_data[question]['incorrect_indices'].append((i, token_length))
+            # Process completion (assistant's response)
+            assistant_msg = None
+            for msg in input_item['messages']:
+                if msg.get('role') == 'assistant':
+                    assistant_msg = msg.get('content', '')
+                    break
+            
+            if not assistant_msg and len(input_item['messages']) > 1:
+                assistant_msg = input_item['messages'][-1].get('content', '')
+            
+            if not assistant_msg:
+                print(f"No assistant response for input {i}")
+                continue
+            
+            # Get token length
+            token_length = combined_token_lengths.get(i, 0)
+            
+            # Check correctness
+            extracted = extract_boxed_text(assistant_msg)
+            expected_answer = question_data[question_msg]['answer']
+            
+            print(f"Input {i} - Extracted answer: {extracted}, Expected answer: {expected_answer}")
+            
+            is_correct = (extracted is not None and 
+                         expected_answer is not None and
+                         extracted == expected_answer)
+            
+            # Store data
+            question_data[question_msg]['completions'].append(assistant_msg)
+            question_data[question_msg]['completion_indices'].append(i)
+            question_data[question_msg]['token_lengths'].append(token_length)
+            
+            if is_correct:
+                question_data[question_msg]['correct_indices'].append(i)
+                print(f"Correct answer found for input {i}")
+            else:
+                question_data[question_msg]['incorrect_indices'].append((i, token_length))
         
         print(f"Processed {len(question_data)} unique questions")
         
@@ -1031,8 +1075,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             answer = data['answer']
             reference_solution = data['reference_solution']
             
-            if answer is None or reference_solution is None or str(reference_solution).lower() == "none":
-                print("NO REFERENCE SOLUTION AVAILABLE!")
+            if answer is None:
+                print(f"No answer available for question: {question[:50]}...")
+                continue
+                
+            if reference_solution is None or str(reference_solution).lower() == "none":
+                print(f"NO REFERENCE SOLUTION AVAILABLE for question: {question[:50]}...")
                 continue
             
             # Check if there are any correct solutions
@@ -1065,9 +1113,19 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         for local_idx, reference_solution in replacement_candidates:
             if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx] and len(inputs[local_idx]['messages']) > 0:
                 print(f"SOLUTION REPLACED at index {local_idx}!")
-                print(f"Original: {inputs[local_idx]['messages'][-1]['content'][:50]}...")
-                inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                print(f"New: {inputs[local_idx]['messages'][-1]['content'][:50]}...")
+                
+                # Find the assistant message to replace
+                for msg_idx, msg in enumerate(inputs[local_idx]['messages']):
+                    if msg.get('role') == 'assistant':
+                        print(f"Original: {msg['content'][:50]}...")
+                        msg['content'] = reference_solution
+                        print(f"New: {msg['content'][:50]}...")
+                        break
+                else:
+                    # If no assistant message found, replace the last message
+                    print(f"Original (last message): {inputs[local_idx]['messages'][-1]['content'][:50]}...")
+                    inputs[local_idx]['messages'][-1]['content'] = reference_solution
+                    print(f"New (last message): {inputs[local_idx]['messages'][-1]['content'][:50]}...")
         
         # Calculate batch accuracy for wandb reporting
         total_correct = 0
