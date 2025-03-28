@@ -1234,8 +1234,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         MAX_TOKENS_PER_SEQUENCE = 1024 * 16
         loss = (per_token_loss * completion_mask).sum() / MAX_TOKENS_PER_SEQUENCE
-        print(f"final loss value: {loss}")
- 
       
         # Log the metrics
         metrics = {}
