@@ -30,7 +30,7 @@ class LmdeployArguments:
     # lmdeploy
     tp: int = 1
     session_len: Optional[int] = None
-    cache_max_entry_count: float = 0.7
+    cache_max_entry_count: float = 0.8
     quant_policy: int = 0  # e.g. 4, 8
     vision_batch_size: int = 1  # max_batch_size in VisionConfig
 
@@ -65,7 +65,7 @@ class VllmArguments:
         enable_prefix_caching (bool): Flag to enable automatic prefix caching. Default is False.
     """
     # vllm
-    gpu_memory_utilization: float = 0.9
+    gpu_memory_utilization: float = 0.8
     tensor_parallel_size: int = 1
     pipeline_parallel_size: int = 1
     max_num_seqs: int = 256
