@@ -1103,56 +1103,31 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         self._metrics[mode]['accuracy'].append(batch_accuracy)
         # END OF SOLUTION REPLACEMENT AND TRACKING
 
-              
+                            
+        # Reshape rewards to group by prompt
         rewards_per_func = gather(rewards_per_func)
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-
-              
+        
         # Reshape rewards to group by prompt
         grouped_rewards = rewards.view(-1, self.num_generations)  # Shape: [num_prompts, num_generations]
         num_prompts = grouped_rewards.shape[0]
-        advantages = torch.zeros_like(rewards)  # Shape: [total_batch_size]
-      
+        
+        # Track the maximum advantage for each prompt
         max_advantages = torch.zeros(num_prompts, device=device)
-        
-        # For each prompt
         for prompt_idx in range(num_prompts):
-            # Get the rewards for this prompt's completions
-            prompt_rewards = grouped_rewards[prompt_idx]  # Shape: [num_generations]
-            
-            # For each completion
-            for completion_idx in range(self.num_generations):
-                # Create mask to select all rewards except the current one
-                mask = torch.ones(self.num_generations, dtype=torch.bool, device=device)
-                mask[completion_idx] = False
-                
-                # Calculate mean of other rewards (more efficient than concatenation)
-                mean_others = prompt_rewards[mask].mean()
-                
-                # Calculate advantage as current reward minus mean of others
-                flat_idx = prompt_idx * self.num_generations + completion_idx
-                advantage_value = prompt_rewards[completion_idx] - mean_others
-                advantages[flat_idx] = advantage_value
-              
-                # Track max advantage for this prompt
-                max_advantages[prompt_idx] = torch.max(max_advantages[prompt_idx], torch.abs(advantage_value))
+            prompt_rewards = grouped_rewards[prompt_idx]
+            prompt_mean = prompt_rewards.mean()
+            prompt_advantages = prompt_rewards - prompt_mean
+            max_advantages[prompt_idx] = torch.max(torch.abs(prompt_advantages))
         
-        # Apply process_slice to select only the local part
-        advantages = advantages[process_slice]
-
-              
-        # Compute grouped-wise rewards
-        # mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        # std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-
+        # Compute grouped-wise rewards - KEEP ORIGINAL CODE
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         # Normalize the rewards to compute the advantages
-        # mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        # std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        # advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
-        # advantages = advantages[process_slice]
-
-              
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
+        advantages = advantages[process_slice]
+        
         mini_batch_advantages = self._split_into_mini_batches(advantages, mini_batch_size=self.args.mini_batch_size)
         # merge advantages to mini_batch_inputs
         for i, mini_batch_advantage in enumerate(mini_batch_advantages):
@@ -1162,6 +1137,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         completion_length = self.accelerator.gather_for_metrics(
             torch.cat([mb['completion_mask'].sum(1).float() for mb in batch_encoded_inputs])).mean().item()
         self._metrics[mode]['completion_length'].append(completion_length)
+        
+        # Add the max advantage logging
         mean_max_advantage = max_advantages.mean().item()
         self._metrics[mode]['max_advantage'].append(mean_max_advantage)
 
