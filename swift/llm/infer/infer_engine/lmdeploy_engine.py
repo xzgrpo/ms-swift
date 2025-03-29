@@ -47,7 +47,7 @@ class LmdeployEngine(InferEngine):
         # engine_kwargs
         tp: int = 1,
         session_len: Optional[int] = None,
-        cache_max_entry_count: float = 0.7,
+        cache_max_entry_count: float = 0.8,
         quant_policy: int = 0,  # e.g. 4, 8
         vision_batch_size: int = 1,  # max_batch_size in VisionConfig
         devices: Optional[List[int]] = None,
@@ -99,7 +99,7 @@ class LmdeployEngine(InferEngine):
     def _prepare_engine_kwargs(self,
                                tp: int = 1,
                                session_len: Optional[int] = None,
-                               cache_max_entry_count: float = 0.7,
+                               cache_max_entry_count: float = 0.8,
                                quant_policy: int = 0,
                                vision_batch_size: int = 1,
                                devices: Optional[List[int]] = None,
