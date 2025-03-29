@@ -1285,11 +1285,12 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         batch_inputs = self._prepare_inputs(inputs)
         device = batch_inputs[0]['input_ids'].device
         
-        # Process mini-batches until a problem is found or all are processed
+        # Process mini-batches
         total_loss = torch.tensor(0.0, device=device)
         total_kl = 0.0
         total_clip_ratio = 0.0
         total_completion_length = 0
+        valid_mini_batches = 0
         
         for mini_batch in batch_inputs:
             try:
@@ -1300,21 +1301,26 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 
                 # Check for NaN in loss
                 if torch.isnan(mini_batch_loss) or torch.isinf(mini_batch_loss):
-                    logger.warning(f"NaN/Inf loss detected at step {self.state.global_step}, skipping entire batch")
-                    model.zero_grad(set_to_none=True)
-                    return torch.tensor(0.0, device=device)
+                    logger.warning(f"NaN/Inf loss detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
+                    continue
                 
                 # Compute gradients
                 self.accelerator.backward(mini_batch_loss)
                 
                 # Check for NaN in gradients
+                has_nan_grad = False
                 for param in model.parameters():
                     if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                        logger.warning(f"NaN/Inf gradient detected at step {self.state.global_step}, skipping entire batch")
-                        model.zero_grad(set_to_none=True)
-                        return torch.tensor(0.0, device=device)
+                        has_nan_grad = True
+                        break
+                
+                if has_nan_grad:
+                    logger.warning(f"NaN/Inf gradient detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
+                    model.zero_grad(set_to_none=True)
+                    continue
                 
                 # If we got here, this mini-batch is good
+                valid_mini_batches += 1
                 if self.beta != 0.0:
                     total_kl += mini_batch_metrics['kl'] * mb_completion_length
                 total_clip_ratio += mini_batch_metrics['clip_ratio'] * mb_completion_length
@@ -1322,12 +1328,17 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 total_loss += mini_batch_loss * mb_completion_length
                 
             except Exception as e:
-                # Any other exception - skip the entire batch
+                # Any other exception within this mini-batch - skip just this mini-batch
                 logger.warning(f"Error in mini-batch at step {self.state.global_step}: {str(e)}")
-                model.zero_grad(set_to_none=True)
-                return torch.tensor(0.0, device=device)
+                continue
         
-        # If we processed all mini-batches successfully, calculate and log metrics
+        # Check if we have any valid mini-batches
+        if valid_mini_batches == 0:
+            logger.warning(f"No valid mini-batches at step {self.state.global_step}, returning zero loss")
+            model.zero_grad(set_to_none=True)
+            return torch.tensor(0.0, device=device)
+        
+        # If we processed at least some mini-batches successfully, calculate and log metrics
         mode = 'eval' if self.control.should_evaluate else 'train'
         if self.beta != 0.0:
             self._metrics[mode]['kl'].append(
