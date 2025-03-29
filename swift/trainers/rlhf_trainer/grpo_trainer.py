@@ -1270,53 +1270,81 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         self.args.mini_batch_size = mini_batch_size
         return output
 
+  
     def training_step(self,
                       model: nn.Module,
                       inputs: Dict[str, Union[torch.Tensor, Any]],
                       num_items_in_batch=None) -> torch.Tensor:
-
         if self.args.mini_batch_size is None:
             return super().training_step(model, inputs, num_items_in_batch)
+        
         model.train()
         if hasattr(self.optimizer, 'train') and callable(self.optimizer.train):
             self.optimizer.train()
-
+    
         batch_inputs = self._prepare_inputs(inputs)
-
-        total_loss = torch.tensor(0.0, device=batch_inputs[0]['input_ids'].device)
-        # Initialize metrics accumulators
+        device = batch_inputs[0]['input_ids'].device
+        
+        # Process mini-batches until a problem is found or all are processed
+        total_loss = torch.tensor(0.0, device=device)
         total_kl = 0.0
         total_clip_ratio = 0.0
         total_completion_length = 0
+        
         for mini_batch in batch_inputs:
-
-            with self.compute_loss_context_manager():
-                mini_batch_loss, mini_batch_metrics = self.compute_loss(model, mini_batch, return_outputs=True)
-                mb_completion_length = mini_batch_metrics['completion_length']
-
-            self.accelerator.backward(mini_batch_loss)
-            # Token-level metrics are weighted by completion length to ensure a fair average over all tokens.
-            if self.beta != 0.0:
-                total_kl += mini_batch_metrics['kl'] * mb_completion_length
-            total_clip_ratio += mini_batch_metrics['clip_ratio'] * mb_completion_length
-            total_completion_length += mb_completion_length
-            total_loss += mini_batch_loss * mb_completion_length
-
+            try:
+                # Compute loss
+                with self.compute_loss_context_manager():
+                    mini_batch_loss, mini_batch_metrics = self.compute_loss(model, mini_batch, return_outputs=True)
+                    mb_completion_length = mini_batch_metrics['completion_length']
+                
+                # Check for NaN in loss
+                if torch.isnan(mini_batch_loss) or torch.isinf(mini_batch_loss):
+                    logger.warning(f"NaN/Inf loss detected at step {self.state.global_step}, skipping entire batch")
+                    model.zero_grad(set_to_none=True)
+                    return torch.tensor(0.0, device=device)
+                
+                # Compute gradients
+                self.accelerator.backward(mini_batch_loss)
+                
+                # Check for NaN in gradients
+                for param in model.parameters():
+                    if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                        logger.warning(f"NaN/Inf gradient detected at step {self.state.global_step}, skipping entire batch")
+                        model.zero_grad(set_to_none=True)
+                        return torch.tensor(0.0, device=device)
+                
+                # If we got here, this mini-batch is good
+                if self.beta != 0.0:
+                    total_kl += mini_batch_metrics['kl'] * mb_completion_length
+                total_clip_ratio += mini_batch_metrics['clip_ratio'] * mb_completion_length
+                total_completion_length += mb_completion_length
+                total_loss += mini_batch_loss * mb_completion_length
+                
+            except Exception as e:
+                # Any other exception - skip the entire batch
+                logger.warning(f"Error in mini-batch at step {self.state.global_step}: {str(e)}")
+                model.zero_grad(set_to_none=True)
+                return torch.tensor(0.0, device=device)
+        
+        # If we processed all mini-batches successfully, calculate and log metrics
         mode = 'eval' if self.control.should_evaluate else 'train'
         if self.beta != 0.0:
             self._metrics[mode]['kl'].append(
                 self.accelerator.gather_for_metrics(total_kl / total_completion_length).mean().item())
         self._metrics[mode]['clip_ratio'].append(
             self.accelerator.gather_for_metrics(total_clip_ratio / total_completion_length).mean().item())
-
+        
         total_loss = total_loss / total_completion_length
-
+    
         del inputs, batch_inputs
         if (self.args.torch_empty_cache_steps is not None
                 and self.state.global_step % self.args.torch_empty_cache_steps == 0):
             gc_collect()
-
+    
         return total_loss.detach()
+
+  
 
     @staticmethod
     def _split_into_mini_batches(batch: List, mini_batch_size: int) -> List[List]:
