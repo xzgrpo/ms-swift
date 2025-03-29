@@ -47,7 +47,7 @@ class VllmEngine(InferEngine):
         hub_token: Optional[str] = None,
         revision: Optional[str] = None,
         # engine_kwargs
-        gpu_memory_utilization: float = 0.9,
+        gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         max_model_len: Optional[int] = None,
@@ -114,7 +114,7 @@ class VllmEngine(InferEngine):
 
     def _prepare_engine_kwargs(
         self,
-        gpu_memory_utilization: float = 0.9,
+        gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         max_model_len: Optional[int] = None,
