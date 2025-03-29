@@ -29,7 +29,7 @@ class GenerationArguments:
     temperature: Optional[float] = None  # Set to 0, which means do_sample is False.
     top_k: Optional[int] = None
     top_p: Optional[float] = None
-    min_p: Optional[float] = 0.01
+    min_p: Optional[float] = 0.05
     repetition_penalty: Optional[float] = None
     num_beams: int = 1
 
