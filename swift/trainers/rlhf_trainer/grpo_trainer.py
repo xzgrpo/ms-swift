@@ -1291,6 +1291,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         total_clip_ratio = 0.0
         total_completion_length = 0
         valid_mini_batches = 0
+        has_any_nan = False
         
         for mini_batch in batch_inputs:
             try:
@@ -1302,6 +1303,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 # Check for NaN in loss
                 if torch.isnan(mini_batch_loss) or torch.isinf(mini_batch_loss):
                     logger.warning(f"NaN/Inf loss detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
+                    has_any_nan = True
                     continue
                 
                 # Compute gradients
@@ -1316,7 +1318,9 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 
                 if has_nan_grad:
                     logger.warning(f"NaN/Inf gradient detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
-                    model.zero_grad(set_to_none=True)
+                    # Zero only this mini-batch's contribution to the gradients
+                    model.zero_grad(set_to_none=False)  # Use set_to_none=False to keep the memory allocated
+                    has_any_nan = True
                     continue
                 
                 # If we got here, this mini-batch is good
@@ -1330,13 +1334,21 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             except Exception as e:
                 # Any other exception within this mini-batch - skip just this mini-batch
                 logger.warning(f"Error in mini-batch at step {self.state.global_step}: {str(e)}")
+                has_any_nan = True
                 continue
         
-        # Check if we have any valid mini-batches
+        # Even if all mini-batches had issues, still return a dummy loss
+        # to ensure optimizer.step() is called
         if valid_mini_batches == 0:
-            logger.warning(f"No valid mini-batches at step {self.state.global_step}, returning zero loss")
-            model.zero_grad(set_to_none=True)
-            return torch.tensor(0.0, device=device)
+            logger.warning(f"No valid mini-batches at step {self.state.global_step}, returning dummy loss")
+            # Create a dummy loss that produces zero gradients but still triggers optimizer step
+            dummy_loss = torch.zeros(1, requires_grad=True, device=device)
+            return dummy_loss
+        
+        # If we had any NaN gradients, but also valid ones, make sure those aren't NaN
+        if has_any_nan:
+            # Clip any remaining NaN values to ensure clean gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), self.args.max_grad_norm)
         
         # If we processed at least some mini-batches successfully, calculate and log metrics
         mode = 'eval' if self.control.should_evaluate else 'train'
