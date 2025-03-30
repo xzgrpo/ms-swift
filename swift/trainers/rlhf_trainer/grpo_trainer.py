@@ -975,7 +975,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             # Initialize question entry
             if question_msg not in question_data:
                 question_data[question_msg] = {
-                    'index': input_item.get('index', i),
                     'answer': input_item.get('answer'),
                     'completions': [],
                     'completion_indices': [],
