@@ -977,7 +977,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 question_data[question_msg] = {
                     'index': input_item.get('index', i),
                     'answer': input_item.get('answer'),
-                    'reference_solution': input_item.get('solution'),
                     'completions': [],
                     'completion_indices': [],
                     'token_lengths': [],
@@ -1022,7 +1021,6 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         # Process each question
         for question, data in question_data.items():
             answer = data['answer']
-            reference_solution = data['reference_solution']
             
             if answer is None:
                 continue
