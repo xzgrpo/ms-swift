@@ -909,20 +909,11 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             else:
                 # Repeat all input columns (but "messages" and "completion") to match the number of generations
                 reward_kwargs = RowPreprocessor.rows_to_batched(inputs)
-              
-                # Add completion_mask-derived token lengths to reward_kwargs
-                if 'completion_mask' in outputs:  # Check for key in dictionary, not attribute
-                    # Get token lengths from completion mask
-                    token_lengths = outputs['completion_mask'].sum(dim=1).tolist()
-                    reward_kwargs['token_lengths'] = token_lengths
-
-              
                 output_reward_func = reward_func(completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
               
-        # START OF SOLUTION REPLACEMENT AND TRACKING        
-        # Function to extract answer from text (keeping this exactly as you provided)
+        # START OF SOLUTION TRACKING        
         def extract_boxed_text(text):
             pattern = r'oxed{(.*?)}'
             matches = re.findall(pattern, text)
@@ -1027,10 +1018,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                 question_data[question_msg]['correct_indices'].append(i)
             else:
                 question_data[question_msg]['incorrect_indices'].append((i, token_length))
-        
-        # SOLUTION REPLACEMENT AND TRACKING
-        replacement_candidates = []  # Store (local_idx, reference_solution) pairs
-        
+
         # Process each question
         for question, data in question_data.items():
             answer = data['answer']
@@ -1046,44 +1034,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             accuracy = f"{correct_count}/{total_count}"
             
             print(f"Question accuracy: {accuracy}")
-            
-            # SOLUTION REPLACEMENT LOGIC
-            if not has_correct_solution and data['incorrect_indices']:
-                print(f"Question with answer {answer} has 0 accuracy")
-                print(f"Question:{question[:200]}")
-                
-                # Check if we have a usable reference solution
-                ref_solution_exists = reference_solution is not None
-                ref_solution_is_none_string = (isinstance(reference_solution, str) and 
-                                             reference_solution.lower() == "none")
-                has_usable_solution = ref_solution_exists and not ref_solution_is_none_string
-                
-                print(f"Reference solution exists: {has_usable_solution}")
-
-                if has_usable_solution:
-                    print(f"Reference solution: {reference_solution[:200]}")
-                    # Sort incorrect solutions by token length (descending)
-                    sorted_incorrect = sorted(data['incorrect_indices'], 
-                                            key=lambda x: x[1], reverse=False)
-                    
-                    # Get the index of the shortest incorrect completion
-                    shortest_idx = sorted_incorrect[0][0]
-                    
-                    # Store for replacement if in current process's slice
-                    local_idx = shortest_idx - self.accelerator.process_index * len(inputs)
-                    if 0 <= local_idx < len(inputs):
-                        replacement_candidates.append((local_idx, reference_solution))
-                        print(f"Will replace solution at index {local_idx}")
-                    else:
-                        print(f"Index {shortest_idx} is not in this process's slice")
         
-        # Apply replacements to inputs
-        for local_idx, reference_solution in replacement_candidates:
-            if 0 <= local_idx < len(inputs) and 'messages' in inputs[local_idx]:
-                # Find the last message which should be the assistant's response in a one-turn conversation
-                if len(inputs[local_idx]['messages']) > 0 and inputs[local_idx]['messages'][-1].get('role') == 'assistant':
-                    # inputs[local_idx]['messages'][-1]['content'] = reference_solution
-                    print(f"SOLUTION REPLACED at index {local_idx}")
 
         mode = 'eval' if self.control.should_evaluate else 'train'
               
@@ -1101,7 +1052,7 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
         # Add to metrics dictionary that gets reported to wandb
         mode = 'eval' if self.control.should_evaluate else 'train'
         self._metrics[mode]['accuracy'].append(batch_accuracy)
-        # END OF SOLUTION REPLACEMENT AND TRACKING
+        # END OF SOLUTION TRACKING
 
                             
         # Reshape rewards to group by prompt
@@ -1209,8 +1160,8 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
 
-        MAX_TOKENS_PER_SEQUENCE = 16384
-        per_query_loss = (per_token_loss * completion_mask).sum(axis=1) / MAX_TOKENS_PER_SEQUENCE
+        MAX_TOKENS_PER_SEQUENCE = 12288
+        per_query_loss = (per_token_loss * completion_mask).sum(axis=-1) / MAX_TOKENS_PER_SEQUENCE
         loss = per_query_loss.mean()
       
         # Log the metrics
@@ -1275,96 +1226,48 @@ class GRPOTrainer(RLHFTrainerMixin, SwiftMixin, HFGRPOTrainer):
                       model: nn.Module,
                       inputs: Dict[str, Union[torch.Tensor, Any]],
                       num_items_in_batch=None) -> torch.Tensor:
+
         if self.args.mini_batch_size is None:
             return super().training_step(model, inputs, num_items_in_batch)
-        
         model.train()
         if hasattr(self.optimizer, 'train') and callable(self.optimizer.train):
             self.optimizer.train()
-    
+
         batch_inputs = self._prepare_inputs(inputs)
-        device = batch_inputs[0]['input_ids'].device
-        
-        # Process mini-batches
-        total_loss = torch.tensor(0.0, device=device)
+
+        total_loss = torch.tensor(0.0, device=batch_inputs[0]['input_ids'].device)
+        # Initialize metrics accumulators
         total_kl = 0.0
         total_clip_ratio = 0.0
         total_completion_length = 0
-        valid_mini_batches = 0
-        has_any_nan = False
-        
         for mini_batch in batch_inputs:
-            try:
-                # Compute loss
-                with self.compute_loss_context_manager():
-                    mini_batch_loss, mini_batch_metrics = self.compute_loss(model, mini_batch, return_outputs=True)
-                    mb_completion_length = mini_batch_metrics['completion_length']
-                
-                # Check for NaN in loss
-                if torch.isnan(mini_batch_loss) or torch.isinf(mini_batch_loss):
-                    logger.warning(f"NaN/Inf loss detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
-                    has_any_nan = True
-                    continue
-                
-                # Compute gradients
-                self.accelerator.backward(mini_batch_loss)
-                
-                # Check for NaN in gradients
-                has_nan_grad = False
-                for param in model.parameters():
-                    if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                        has_nan_grad = True
-                        break
-                
-                if has_nan_grad:
-                    logger.warning(f"NaN/Inf gradient detected in mini-batch at step {self.state.global_step}, skipping this mini-batch")
-                    # Zero only this mini-batch's contribution to the gradients
-                    model.zero_grad(set_to_none=False)  # Use set_to_none=False to keep the memory allocated
-                    has_any_nan = True
-                    continue
-                
-                # If we got here, this mini-batch is good
-                valid_mini_batches += 1
-                if self.beta != 0.0:
-                    total_kl += mini_batch_metrics['kl'] * mb_completion_length
-                total_clip_ratio += mini_batch_metrics['clip_ratio'] * mb_completion_length
-                total_completion_length += mb_completion_length
-                total_loss += mini_batch_loss * mb_completion_length
-                
-            except Exception as e:
-                # Any other exception within this mini-batch - skip just this mini-batch
-                logger.warning(f"Error in mini-batch at step {self.state.global_step}: {str(e)}")
-                has_any_nan = True
-                continue
-        
-        # Even if all mini-batches had issues, still return a dummy loss
-        # to ensure optimizer.step() is called
-        if valid_mini_batches == 0:
-            logger.warning(f"No valid mini-batches at step {self.state.global_step}, returning dummy loss")
-            # Create a dummy loss that produces zero gradients but still triggers optimizer step
-            dummy_loss = torch.zeros(1, requires_grad=True, device=device)
-            return dummy_loss
-        
-        # If we had any NaN gradients, but also valid ones, make sure those aren't NaN
-        if has_any_nan:
-            # Clip any remaining NaN values to ensure clean gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), self.args.max_grad_norm)
-        
-        # If we processed at least some mini-batches successfully, calculate and log metrics
+
+            with self.compute_loss_context_manager():
+                mini_batch_loss, mini_batch_metrics = self.compute_loss(model, mini_batch, return_outputs=True)
+                mb_completion_length = mini_batch_metrics['completion_length']
+
+            self.accelerator.backward(mini_batch_loss)
+            # Token-level metrics are weighted by completion length to ensure a fair average over all tokens.
+            if self.beta != 0.0:
+                total_kl += mini_batch_metrics['kl'] * mb_completion_length
+            total_clip_ratio += mini_batch_metrics['clip_ratio'] * mb_completion_length
+            total_completion_length += mb_completion_length
+            total_loss += mini_batch_loss * mb_completion_length
+
         mode = 'eval' if self.control.should_evaluate else 'train'
         if self.beta != 0.0:
             self._metrics[mode]['kl'].append(
                 self.accelerator.gather_for_metrics(total_kl / total_completion_length).mean().item())
         self._metrics[mode]['clip_ratio'].append(
             self.accelerator.gather_for_metrics(total_clip_ratio / total_completion_length).mean().item())
-        
+
         total_loss = total_loss / total_completion_length
-    
+
         del inputs, batch_inputs
         if (self.args.torch_empty_cache_steps is not None
                 and self.state.global_step % self.args.torch_empty_cache_steps == 0):
             gc_collect()
-    
+
         return total_loss.detach()
 
   
